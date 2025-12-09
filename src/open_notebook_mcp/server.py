@@ -16,8 +16,14 @@ log = logging.getLogger("open-notebook-mcp")
 mcp = FastMCP("open-notebook-mcp")
 
 # -----------------------------
-# Configuration
+# Configuration and Constants
 # -----------------------------
+
+# Maximum number of items to return in list operations
+MAX_LIMIT = 100
+
+# Default timeout for HTTP requests (seconds)
+DEFAULT_TIMEOUT_S = 30.0
 
 def get_base_url() -> str:
     """Get the Open Notebook API base URL from environment."""
@@ -27,9 +33,15 @@ def get_auth_token() -> Optional[str]:
     """Get the authentication token from environment."""
     return os.getenv("OPEN_NOTEBOOK_PASSWORD")
 
+def generate_request_id() -> str:
+    """Generate a unique request ID for tracking."""
+    return str(uuid.uuid4())
+
 # -----------------------------
 # Capability index (source of truth)
 # -----------------------------
+# Note: CAPABILITIES is a tuple to ensure immutability and prevent accidental modification.
+# This is the single source of truth for all available tools in the server.
 
 Detail = Literal["name", "summary", "full"]
 
@@ -375,9 +387,9 @@ def search_capabilities(query: str = "", detail: Detail = "summary", limit: int 
         limit: Maximum number of results (1-50)
     
     Returns:
-        Dictionary with matches, count, and hints
+        Dictionary with request_id, query, detail, count, matches, and hint fields
     """
-    request_id = str(uuid.uuid4())
+    request_id = generate_request_id()
     limit = max(1, min(int(limit), 50))
 
     scored = [(c, _match_score(query, c)) for c in CAPABILITIES]
@@ -416,8 +428,8 @@ def search_capabilities(query: str = "", detail: Detail = "summary", limit: int 
 # -----------------------------
 # HTTP helper functions
 # -----------------------------
-
-DEFAULT_TIMEOUT_S = 30.0
+# HTTP helper functions
+# -----------------------------
 
 async def make_request(
     method: str,
@@ -438,7 +450,7 @@ async def make_request(
         Response JSON as dictionary
     
     Raises:
-        httpx.HTTPError: If request fails
+        Exception: If request fails with formatted error message
     """
     base_url = get_base_url()
     url = f"{base_url}{endpoint}"
@@ -467,7 +479,12 @@ async def make_request(
             if not r.text:
                 return {"message": "Success"}
             
-            return r.json()
+            try:
+                return r.json()
+            except (ValueError, httpx.ResponseNotRead) as json_err:
+                # If response is not valid JSON, return text content
+                log.warning(f"Non-JSON response from {endpoint}: {json_err}")
+                return {"message": "Success", "content": r.text}
             
         except httpx.HTTPError as e:
             error_msg = str(e)
@@ -475,7 +492,8 @@ async def make_request(
                 try:
                     error_detail = e.response.json()
                     error_msg = error_detail.get("detail", error_msg)
-                except Exception:
+                except (ValueError, AttributeError):
+                    # If error response is not JSON, use text or default message
                     error_msg = e.response.text or error_msg
             
             raise Exception(f"API request failed: {error_msg}")
@@ -500,7 +518,7 @@ async def list_notebooks(
     Returns:
         Dictionary with notebooks list and metadata
     """
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, MAX_LIMIT))
     params = {"order_by": order_by}
     if archived is not None:
         params["archived"] = archived
@@ -512,7 +530,7 @@ async def list_notebooks(
         notebooks = notebooks[:limit]
     
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "count": len(notebooks) if isinstance(notebooks, list) else 0,
         "notebooks": notebooks,
     }
@@ -529,7 +547,7 @@ async def get_notebook(notebook_id: str) -> dict[str, Any]:
     """
     notebook = await make_request("GET", f"/api/notebooks/{notebook_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "notebook": notebook,
     }
 
@@ -550,7 +568,7 @@ async def create_notebook(name: str, description: Optional[str] = None) -> dict[
     
     notebook = await make_request("POST", "/api/notebooks", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "notebook": notebook,
     }
 
@@ -582,7 +600,7 @@ async def update_notebook(
     
     notebook = await make_request("PUT", f"/api/notebooks/{notebook_id}", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "notebook": notebook,
     }
 
@@ -598,7 +616,7 @@ async def delete_notebook(notebook_id: str) -> dict[str, Any]:
     """
     result = await make_request("DELETE", f"/api/notebooks/{notebook_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -622,14 +640,14 @@ async def list_sources(
     Returns:
         Dictionary with sources list and metadata
     """
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, MAX_LIMIT))
     params = {"limit": limit, "offset": offset}
     if notebook_id is not None:
         params["notebook_id"] = notebook_id
     
     sources = await make_request("GET", "/api/sources", params=params)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "count": len(sources) if isinstance(sources, list) else 0,
         "sources": sources,
     }
@@ -646,7 +664,7 @@ async def get_source(source_id: str) -> dict[str, Any]:
     """
     source = await make_request("GET", f"/api/sources/{source_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "source": source,
     }
 
@@ -682,7 +700,7 @@ async def create_source(
     
     source = await make_request("POST", "/api/sources", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "source": source,
     }
 
@@ -710,7 +728,7 @@ async def update_source(
     
     source = await make_request("PUT", f"/api/sources/{source_id}", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "source": source,
     }
 
@@ -726,7 +744,7 @@ async def delete_source(source_id: str) -> dict[str, Any]:
     """
     result = await make_request("DELETE", f"/api/sources/{source_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -750,14 +768,14 @@ async def list_notes(
     Returns:
         Dictionary with notes list and metadata
     """
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, MAX_LIMIT))
     params = {"limit": limit, "offset": offset}
     if notebook_id is not None:
         params["notebook_id"] = notebook_id
     
     notes = await make_request("GET", "/api/notes", params=params)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "count": len(notes) if isinstance(notes, list) else 0,
         "notes": notes,
     }
@@ -774,7 +792,7 @@ async def get_note(note_id: str) -> dict[str, Any]:
     """
     note = await make_request("GET", f"/api/notes/{note_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "note": note,
     }
 
@@ -806,7 +824,7 @@ async def create_note(
     
     note = await make_request("POST", "/api/notes", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "note": note,
     }
 
@@ -838,7 +856,7 @@ async def update_note(
     
     note = await make_request("PUT", f"/api/notes/{note_id}", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "note": note,
     }
 
@@ -854,7 +872,7 @@ async def delete_note(note_id: str) -> dict[str, Any]:
     """
     result = await make_request("DELETE", f"/api/notes/{note_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -891,7 +909,7 @@ async def search(
     
     results = await make_request("POST", "/api/search", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "results": results,
     }
 
@@ -926,7 +944,7 @@ async def ask_question(
     
     result = await make_request("POST", "/api/search/ask", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -961,7 +979,7 @@ async def ask_simple(
     
     result = await make_request("POST", "/api/search/ask/simple", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -979,14 +997,14 @@ async def list_models(limit: int = 50) -> dict[str, Any]:
     Returns:
         Dictionary with models list and metadata
     """
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, MAX_LIMIT))
     models = await make_request("GET", "/api/models")
     
     if isinstance(models, list):
         models = models[:limit]
     
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "count": len(models) if isinstance(models, list) else 0,
         "models": models,
     }
@@ -1003,7 +1021,7 @@ async def get_model(model_id: str) -> dict[str, Any]:
     """
     model = await make_request("GET", f"/api/models/{model_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "model": model,
     }
 
@@ -1027,7 +1045,7 @@ async def create_model(name: str, provider: str, type: str) -> dict[str, Any]:
     
     model = await make_request("POST", "/api/models", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "model": model,
     }
 
@@ -1043,7 +1061,7 @@ async def delete_model(model_id: str) -> dict[str, Any]:
     """
     result = await make_request("DELETE", f"/api/models/{model_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -1056,7 +1074,7 @@ async def get_default_models() -> dict[str, Any]:
     """
     defaults = await make_request("GET", "/api/models/defaults")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "defaults": defaults,
     }
 
@@ -1078,7 +1096,7 @@ async def list_chat_sessions(
     Returns:
         Dictionary with sessions list and metadata
     """
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, MAX_LIMIT))
     params = {}
     if notebook_id is not None:
         params["notebook_id"] = notebook_id
@@ -1089,7 +1107,7 @@ async def list_chat_sessions(
         sessions = sessions[:limit]
     
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "count": len(sessions) if isinstance(sessions, list) else 0,
         "sessions": sessions,
     }
@@ -1112,7 +1130,7 @@ async def create_chat_session(notebook_id: str, title: str) -> dict[str, Any]:
     
     session = await make_request("POST", "/api/chat/sessions", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "session": session,
     }
 
@@ -1128,7 +1146,7 @@ async def get_chat_session(session_id: str) -> dict[str, Any]:
     """
     session = await make_request("GET", f"/api/chat/sessions/{session_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "session": session,
     }
 
@@ -1152,7 +1170,7 @@ async def update_chat_session(
     
     session = await make_request("PUT", f"/api/chat/sessions/{session_id}", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "session": session,
     }
 
@@ -1168,7 +1186,7 @@ async def delete_chat_session(session_id: str) -> dict[str, Any]:
     """
     result = await make_request("DELETE", f"/api/chat/sessions/{session_id}")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "result": result,
     }
 
@@ -1197,7 +1215,7 @@ async def execute_chat(
     
     response = await make_request("POST", "/api/chat/execute", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "response": response,
     }
 
@@ -1223,7 +1241,7 @@ async def get_chat_context(
     
     context = await make_request("POST", "/api/chat/context", json_data=data)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "context": context,
     }
 
@@ -1240,7 +1258,7 @@ async def get_settings() -> dict[str, Any]:
     """
     settings = await make_request("GET", "/api/settings")
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "settings": settings,
     }
 
@@ -1256,7 +1274,7 @@ async def update_settings(settings: dict[str, Any]) -> dict[str, Any]:
     """
     result = await make_request("PUT", "/api/settings", json_data=settings)
     return {
-        "request_id": str(uuid.uuid4()),
+        "request_id": generate_request_id(),
         "settings": result,
     }
 
