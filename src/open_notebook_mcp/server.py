@@ -143,7 +143,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         name="update_source",
         summary="Update a source.",
         tags=("sources", "update", "write"),
-        args={"source_id": "str", "title": "Optional[str]", "topics": "Optional[list]"},
+        args={"source_id": "str", "title": "Optional[str]", "topics": "Optional[list[str]]"},
         returns="dict[str, Any]",
         example={"source_id": "source:abc123", "title": "New Title"},
         typical_bytes=2000,
@@ -180,7 +180,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         name="create_note",
         summary="Create a new note.",
         tags=("notes", "create", "write"),
-        args={"notebook_id": "str", "title": "str", "content": "str", "topics": "Optional[list]"},
+        args={"notebook_id": "str", "title": "str", "content": "str", "topics": "Optional[list[str]]"},
         returns="dict[str, Any]",
         example={"notebook_id": "notebook:abc123", "title": "My Note", "content": "Note content"},
         typical_bytes=1500,
@@ -189,7 +189,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         name="update_note",
         summary="Update a note.",
         tags=("notes", "update", "write"),
-        args={"note_id": "str", "title": "Optional[str]", "content": "Optional[str]", "topics": "Optional[list]"},
+        args={"note_id": "str", "title": "Optional[str]", "content": "Optional[str]", "topics": "Optional[list[str]]"},
         returns="dict[str, Any]",
         example={"note_id": "note:abc123", "title": "Updated Title"},
         typical_bytes=1500,
@@ -481,7 +481,7 @@ async def make_request(
             
             try:
                 return r.json()
-            except (ValueError, httpx.ResponseNotRead) as json_err:
+            except (ValueError, Exception) as json_err:
                 # If response is not valid JSON, return text content
                 log.warning(f"Non-JSON response from {endpoint}: {json_err}")
                 return {"message": "Success", "content": r.text}
